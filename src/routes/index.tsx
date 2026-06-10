@@ -243,16 +243,15 @@ function Index() {
       }
 
       const entry = pickEntryHtml(normalized);
-      if (!entry) {
-        setStatus("");
-        setError("Keine HTML-Datei in der ZIP gefunden. Es wird eine index.html (oder eine andere .html) benötigt.");
-        return;
+      if (entry) {
+        setStatus(`Starte ${entry} …`);
+        const html = await normalized[entry].blob.text();
+        const rewritten = await rewriteHtml(html, entry, normalized);
+        setSrcDoc(rewritten);
+      } else {
+        setStatus("Erstelle Viewer …");
+        setSrcDoc(generateAutoViewer(normalized));
       }
-
-      setStatus(`Starte ${entry} …`);
-      const html = await normalized[entry].blob.text();
-      const rewritten = await rewriteHtml(html, entry, normalized);
-      setSrcDoc(rewritten);
       setStatus("");
     } catch (e) {
       console.error(e);
