@@ -22,8 +22,11 @@ const EXT = {
   js: /\.m?js$/i,
   css: /\.css$/i,
   html: /\.html?$/i,
-  text: /\.(txt|md|json|xml|csv|log|ya?ml|toml|ini|conf|env)$/i,
-  code: /\.(ts|tsx|jsx|py|rb|go|rs|java|c|cpp|h|hpp|cs|php|sh|sql)$/i,
+  md: /\.(md|markdown|mdx)$/i,
+  py: /\.py$/i,
+  exe: /\.(exe|msi|app|dmg|deb|rpm|appimage|apk|jar|bat|cmd|ps1|sh)$/i,
+  text: /\.(txt|json|xml|csv|log|ya?ml|toml|ini|conf|env)$/i,
+  code: /\.(ts|tsx|jsx|py|rb|go|rs|java|c|cpp|h|hpp|cs|php|sql|swift|kt)$/i,
 };
 
 function pickEntryHtml(files: FileMap): string | null {
