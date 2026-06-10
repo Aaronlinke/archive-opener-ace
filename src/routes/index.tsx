@@ -474,7 +474,7 @@ function Index() {
         setSrcDoc(rewritten);
       } else {
         setStatus("Erstelle Viewer …");
-        setSrcDoc(generateAutoViewer(normalized));
+        setSrcDoc(await generateAutoViewer(normalized, file.name));
       }
       setStatus("");
     } catch (e) {
