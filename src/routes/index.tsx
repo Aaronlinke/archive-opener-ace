@@ -14,12 +14,113 @@ export const Route = createFileRoute("/")({
 
 type FileMap = Record<string, { blob: Blob; url: string }>;
 
+const EXT = {
+  image: /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i,
+  audio: /\.(mp3|wav|ogg|m4a|flac|aac)$/i,
+  video: /\.(mp4|webm|ogv|mov|m4v)$/i,
+  pdf: /\.pdf$/i,
+  js: /\.m?js$/i,
+  css: /\.css$/i,
+  html: /\.html?$/i,
+  text: /\.(txt|md|json|xml|csv|log|ya?ml|toml|ini|conf|env)$/i,
+  code: /\.(ts|tsx|jsx|py|rb|go|rs|java|c|cpp|h|hpp|cs|php|sh|sql)$/i,
+};
+
 function pickEntryHtml(files: FileMap): string | null {
   const keys = Object.keys(files);
   const prefer = keys.find((k) => /(^|\/)index\.html?$/i.test(k));
   if (prefer) return prefer;
-  const anyHtml = keys.find((k) => /\.html?$/i.test(k));
+  const anyHtml = keys.find((k) => EXT.html.test(k));
   return anyHtml ?? null;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+function classify(name: string): keyof typeof EXT | "other" {
+  for (const k of Object.keys(EXT) as Array<keyof typeof EXT>) {
+    if (EXT[k].test(name)) return k;
+  }
+  return "other";
+}
+
+function generateAutoViewer(files: FileMap): string {
+  const names = Object.keys(files).sort();
+  const groups: Record<string, string[]> = {
+    image: [], audio: [], video: [], pdf: [], js: [], css: [], text: [], code: [], other: [],
+  };
+  for (const n of names) {
+    const c = classify(n);
+    if (c === "html") continue;
+    (groups[c] ?? groups.other).push(n);
+  }
+
+  const onlyJs =
+    groups.js.length > 0 &&
+    groups.image.length === 0 && groups.audio.length === 0 &&
+    groups.video.length === 0 && groups.pdf.length === 0;
+  if (onlyJs) {
+    const scripts = groups.js.map((n) => `<script src="${files[n].url}"><\/script>`).join("\n");
+    const styles = groups.css.map((n) => `<link rel="stylesheet" href="${files[n].url}">`).join("\n");
+    return `<!doctype html><html><head><meta charset="utf-8"><title>JS Runner</title>${styles}
+<style>body{margin:0;font-family:system-ui;padding:1rem}</style></head>
+<body><div id="app"></div><div id="root"></div>${scripts}</body></html>`;
+  }
+
+  const section = (title: string, body: string) =>
+    body ? `<section><h2>${title}</h2>${body}</section>` : "";
+
+  const imgs = groups.image
+    .map((n) => `<figure><img loading="lazy" src="${files[n].url}" alt="${escapeHtml(n)}"><figcaption>${escapeHtml(n)}</figcaption></figure>`)
+    .join("");
+  const auds = groups.audio
+    .map((n) => `<div class="media"><p>${escapeHtml(n)}</p><audio controls src="${files[n].url}"></audio></div>`)
+    .join("");
+  const vids = groups.video
+    .map((n) => `<div class="media"><p>${escapeHtml(n)}</p><video controls src="${files[n].url}"></video></div>`)
+    .join("");
+  const pdfs = groups.pdf
+    .map((n) => `<div class="media"><p>${escapeHtml(n)}</p><iframe src="${files[n].url}" title="${escapeHtml(n)}"></iframe></div>`)
+    .join("");
+  const textList = [...groups.text, ...groups.code]
+    .map((n) => `<li><a href="${files[n].url}" target="_blank" rel="noopener">${escapeHtml(n)}</a></li>`)
+    .join("");
+  const others = groups.other
+    .map((n) => `<li><a href="${files[n].url}" download="${escapeHtml(n.split("/").pop() ?? n)}">${escapeHtml(n)}</a></li>`)
+    .join("");
+
+  const body =
+    section("Bilder", imgs ? `<div class="grid">${imgs}</div>` : "") +
+    section("Video", vids) +
+    section("Audio", auds) +
+    section("PDF", pdfs) +
+    section("Text / Code", textList ? `<ul>${textList}</ul>` : "") +
+    section("Weitere Dateien", others ? `<ul>${others}</ul>` : "");
+
+  return `<!doctype html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZIP Inhalt</title>
+<style>
+  :root{color-scheme:light dark}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0b0c;color:#e7e7ea;padding:1.25rem;line-height:1.5}
+  h1{font-size:1.25rem;margin:0 0 1rem}
+  h2{font-size:.8rem;margin:1.5rem 0 .6rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.05em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem}
+  figure{margin:0;background:#18181b;border:1px solid #27272a;border-radius:.5rem;overflow:hidden}
+  figure img{display:block;width:100%;height:160px;object-fit:cover}
+  figcaption{font-size:.7rem;padding:.4rem .5rem;color:#a1a1aa;word-break:break-all}
+  .media{background:#18181b;border:1px solid #27272a;border-radius:.5rem;padding:.75rem;margin-bottom:.75rem}
+  .media p{margin:0 0 .5rem;font-size:.8rem;color:#a1a1aa;word-break:break-all}
+  audio,video{width:100%;display:block;border-radius:.25rem}
+  video{max-height:70vh;background:#000}
+  iframe{width:100%;height:80vh;border:0;background:#fff;border-radius:.25rem}
+  ul{padding-left:1.25rem;margin:0}
+  li{margin:.25rem 0;word-break:break-all}
+  a{color:#60a5fa}
+</style></head>
+<body><h1>📦 Inhalt der ZIP</h1>${body || "<p>Keine anzeigbaren Dateien gefunden.</p>"}</body></html>`;
 }
 
 function resolvePath(base: string, rel: string): string {
@@ -142,16 +243,15 @@ function Index() {
       }
 
       const entry = pickEntryHtml(normalized);
-      if (!entry) {
-        setStatus("");
-        setError("Keine HTML-Datei in der ZIP gefunden. Es wird eine index.html (oder eine andere .html) benötigt.");
-        return;
+      if (entry) {
+        setStatus(`Starte ${entry} …`);
+        const html = await normalized[entry].blob.text();
+        const rewritten = await rewriteHtml(html, entry, normalized);
+        setSrcDoc(rewritten);
+      } else {
+        setStatus("Erstelle Viewer …");
+        setSrcDoc(generateAutoViewer(normalized));
       }
-
-      setStatus(`Starte ${entry} …`);
-      const html = await normalized[entry].blob.text();
-      const rewritten = await rewriteHtml(html, entry, normalized);
-      setSrcDoc(rewritten);
       setStatus("");
     } catch (e) {
       console.error(e);
