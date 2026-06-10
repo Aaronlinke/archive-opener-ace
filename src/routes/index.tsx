@@ -48,10 +48,17 @@ function classify(name: string): keyof typeof EXT | "other" {
   return "other";
 }
 
-function generateAutoViewer(files: FileMap): string {
+function formatSize(n: number): string {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+}
+
+async function generateAutoViewer(files: FileMap, zipName: string): Promise<string> {
   const names = Object.keys(files).sort();
   const groups: Record<string, string[]> = {
-    image: [], audio: [], video: [], pdf: [], js: [], css: [], text: [], code: [], other: [],
+    image: [], audio: [], video: [], pdf: [], js: [], css: [], md: [], py: [], exe: [], text: [], code: [], other: [],
   };
   for (const n of names) {
     const c = classify(n);
@@ -62,7 +69,8 @@ function generateAutoViewer(files: FileMap): string {
   const onlyJs =
     groups.js.length > 0 &&
     groups.image.length === 0 && groups.audio.length === 0 &&
-    groups.video.length === 0 && groups.pdf.length === 0;
+    groups.video.length === 0 && groups.pdf.length === 0 &&
+    groups.py.length === 0 && groups.exe.length === 0 && groups.md.length === 0;
   if (onlyJs) {
     const scripts = groups.js.map((n) => `<script src="${files[n].url}"><\/script>`).join("\n");
     const styles = groups.css.map((n) => `<link rel="stylesheet" href="${files[n].url}">`).join("\n");
@@ -70,6 +78,50 @@ function generateAutoViewer(files: FileMap): string {
 <style>body{margin:0;font-family:system-ui;padding:1rem}</style></head>
 <body><div id="app"></div><div id="root"></div>${scripts}</body></html>`;
   }
+
+  // README detection
+  const readmeName =
+    names.find((n) => /(^|\/)readme\.md$/i.test(n)) ||
+    names.find((n) => /(^|\/)readme(\.txt)?$/i.test(n)) ||
+    groups.md[0];
+  let readmeRaw = "";
+  let readmeIsMarkdown = false;
+  if (readmeName) {
+    readmeRaw = await files[readmeName].blob.text();
+    readmeIsMarkdown = /\.(md|markdown|mdx)$/i.test(readmeName);
+  }
+
+  // Python entry
+  const pyEntry =
+    groups.py.find((n) => /(^|\/)(main|app|run|__main__)\.py$/i.test(n)) || groups.py[0] || null;
+
+  // Pre-load all .py source as text for Pyodide
+  const pyFiles: Array<{ path: string; content: string }> = [];
+  for (const p of groups.py) {
+    pyFiles.push({ path: p, content: await files[p].blob.text() });
+  }
+
+  // Pre-load code/text contents for inline viewer (cap large files)
+  const codeFiles: Array<{ path: string; content: string; lang: string }> = [];
+  const langFor = (n: string) => {
+    const ext = n.split(".").pop()?.toLowerCase() ?? "";
+    const map: Record<string, string> = {
+      py: "python", js: "javascript", mjs: "javascript", ts: "typescript", tsx: "tsx", jsx: "jsx",
+      html: "html", css: "css", json: "json", xml: "xml", yml: "yaml", yaml: "yaml",
+      sh: "bash", bat: "dos", ps1: "powershell", sql: "sql", md: "markdown",
+      java: "java", c: "c", cpp: "cpp", h: "c", cs: "csharp", go: "go", rs: "rust",
+      rb: "ruby", php: "php", swift: "swift", kt: "kotlin",
+    };
+    return map[ext] ?? "plaintext";
+  };
+  for (const n of [...groups.code, ...groups.text, ...groups.js, ...groups.css, ...groups.md]) {
+    if (n === readmeName) continue;
+    const blob = files[n].blob;
+    if (blob.size > 200_000) continue;
+    codeFiles.push({ path: n, content: await blob.text(), lang: langFor(n) });
+  }
+
+  const totalSize = Object.values(files).reduce((a, f) => a + f.blob.size, 0);
 
   const section = (title: string, body: string) =>
     body ? `<section><h2>${title}</h2>${body}</section>` : "";
@@ -86,44 +138,213 @@ function generateAutoViewer(files: FileMap): string {
   const pdfs = groups.pdf
     .map((n) => `<div class="media"><p>${escapeHtml(n)}</p><iframe src="${files[n].url}" title="${escapeHtml(n)}"></iframe></div>`)
     .join("");
-  const textList = [...groups.text, ...groups.code]
-    .map((n) => `<li><a href="${files[n].url}" target="_blank" rel="noopener">${escapeHtml(n)}</a></li>`)
-    .join("");
-  const others = groups.other
-    .map((n) => `<li><a href="${files[n].url}" download="${escapeHtml(n.split("/").pop() ?? n)}">${escapeHtml(n)}</a></li>`)
+
+  const exeCards = groups.exe
+    .map((n) => {
+      const ext = (n.split(".").pop() ?? "").toLowerCase();
+      const platform =
+        /exe|msi|bat|cmd|ps1/.test(ext) ? "Windows" :
+        /app|dmg/.test(ext) ? "macOS" :
+        /deb|rpm|appimage|sh/.test(ext) ? "Linux" :
+        /apk/.test(ext) ? "Android" :
+        /jar/.test(ext) ? "Java" : "Programm";
+      return `<div class="exe"><div><strong>${escapeHtml(n.split("/").pop() ?? n)}</strong>
+        <div class="meta">${platform} · ${formatSize(files[n].blob.size)}</div>
+        <div class="meta">${escapeHtml(n)}</div></div>
+        <a class="btn" href="${files[n].url}" download="${escapeHtml(n.split("/").pop() ?? n)}">⬇ Download</a></div>`;
+    })
     .join("");
 
+  const othersList = groups.other
+    .map((n) => `<li><a href="${files[n].url}" download="${escapeHtml(n.split("/").pop() ?? n)}">${escapeHtml(n)}</a> <span class="muted">(${formatSize(files[n].blob.size)})</span></li>`)
+    .join("");
+
+  const fileTree = names
+    .map((n) => `<li><span class="path">${escapeHtml(n)}</span> <span class="muted">${formatSize(files[n].blob.size)}</span> <a href="${files[n].url}" download="${escapeHtml(n.split("/").pop() ?? n)}">⬇</a></li>`)
+    .join("");
+
+  const pyButton = pyEntry
+    ? `<section><h2>Python ausführen</h2>
+      <div class="exe"><div><strong>${escapeHtml(pyEntry)}</strong><div class="meta">Wird im Browser via Pyodide gestartet (nur reines Python ohne native Module).</div></div>
+      <button class="btn" id="runPy">▶ Ausführen</button></div>
+      <pre id="pyOut" class="pyout">Bereit.</pre></section>`
+    : "";
+
+  const readmeBlock = readmeName
+    ? `<section><h2>${escapeHtml(readmeName)}</h2><div id="readme" data-md="${readmeIsMarkdown ? "1" : "0"}"></div>
+       <script type="application/json" id="readmeRaw">${escapeHtml(readmeRaw)}</script></section>`
+    : "";
+
+  const codeBlock = codeFiles.length
+    ? `<section><h2>Quellcode</h2>
+       <div class="codeWrap">
+         <ul class="fileList">
+           ${codeFiles.map((f, i) => `<li><button data-i="${i}"${i === 0 ? ' class="active"' : ""}>${escapeHtml(f.path)}</button></li>`).join("")}
+         </ul>
+         <pre><code id="codeView" class="hljs"></code></pre>
+       </div>
+       <script type="application/json" id="codeData">${escapeHtml(JSON.stringify(codeFiles))}</script></section>`
+    : "";
+
   const body =
-    section("Bilder", imgs ? `<div class="grid">${imgs}</div>` : "") +
+    (readmeBlock || "") +
+    section("Bilder / Screenshots", imgs ? `<div class="grid">${imgs}</div>` : "") +
     section("Video", vids) +
     section("Audio", auds) +
     section("PDF", pdfs) +
-    section("Text / Code", textList ? `<ul>${textList}</ul>` : "") +
-    section("Weitere Dateien", others ? `<ul>${others}</ul>` : "");
+    (pyButton || "") +
+    section("Programme / Installer", exeCards ? `<div class="exeList">${exeCards}</div><p class="muted">Native Programme können im Browser nicht direkt gestartet werden – lade sie herunter und führe sie lokal aus.</p>` : "") +
+    (codeBlock || "") +
+    section("Alle Dateien", `<ul class="tree">${fileTree}</ul>`) +
+    section("Weitere Downloads", othersList ? `<ul>${othersList}</ul>` : "");
 
   return `<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZIP Inhalt</title>
+<title>${escapeHtml(zipName)}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
 <style>
-  :root{color-scheme:light dark}
+  :root{color-scheme:dark}
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0b0c;color:#e7e7ea;padding:1.25rem;line-height:1.5}
-  h1{font-size:1.25rem;margin:0 0 1rem}
-  h2{font-size:.8rem;margin:1.5rem 0 .6rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.05em}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem}
-  figure{margin:0;background:#18181b;border:1px solid #27272a;border-radius:.5rem;overflow:hidden}
-  figure img{display:block;width:100%;height:160px;object-fit:cover}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0b0c;color:#e7e7ea;padding:1.25rem;line-height:1.55;max-width:1100px;margin-inline:auto}
+  header.top{display:flex;align-items:center;gap:.75rem;padding-bottom:1rem;border-bottom:1px solid #27272a;margin-bottom:1rem}
+  header.top .icon{font-size:2rem}
+  header.top h1{margin:0;font-size:1.2rem}
+  header.top .meta{font-size:.8rem;color:#a1a1aa}
+  h2{font-size:.75rem;margin:2rem 0 .75rem;color:#a1a1aa;text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+  section:first-of-type h2{margin-top:.5rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.75rem}
+  figure{margin:0;background:#18181b;border:1px solid #27272a;border-radius:.6rem;overflow:hidden;cursor:zoom-in}
+  figure img{display:block;width:100%;height:180px;object-fit:cover}
   figcaption{font-size:.7rem;padding:.4rem .5rem;color:#a1a1aa;word-break:break-all}
-  .media{background:#18181b;border:1px solid #27272a;border-radius:.5rem;padding:.75rem;margin-bottom:.75rem}
+  .media{background:#18181b;border:1px solid #27272a;border-radius:.6rem;padding:.75rem;margin-bottom:.75rem}
   .media p{margin:0 0 .5rem;font-size:.8rem;color:#a1a1aa;word-break:break-all}
   audio,video{width:100%;display:block;border-radius:.25rem}
   video{max-height:70vh;background:#000}
-  iframe{width:100%;height:80vh;border:0;background:#fff;border-radius:.25rem}
+  .media iframe{width:100%;height:80vh;border:0;background:#fff;border-radius:.25rem}
   ul{padding-left:1.25rem;margin:0}
   li{margin:.25rem 0;word-break:break-all}
   a{color:#60a5fa}
+  .muted{color:#71717a;font-size:.75rem}
+  .exeList{display:grid;gap:.5rem}
+  .exe{display:flex;justify-content:space-between;align-items:center;gap:1rem;background:#18181b;border:1px solid #27272a;border-radius:.6rem;padding:.85rem 1rem}
+  .exe .meta{font-size:.75rem;color:#a1a1aa;margin-top:.15rem}
+  .btn{display:inline-block;background:#3b82f6;color:white;border:0;padding:.5rem .85rem;border-radius:.4rem;font-size:.8rem;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .btn:hover{background:#2563eb}
+  .pyout{background:#000;color:#a7f3d0;padding:.75rem;border-radius:.4rem;font-size:.78rem;max-height:300px;overflow:auto;margin-top:.5rem;white-space:pre-wrap}
+  .codeWrap{display:grid;grid-template-columns:240px 1fr;gap:.75rem;background:#18181b;border:1px solid #27272a;border-radius:.6rem;overflow:hidden}
+  @media (max-width:700px){.codeWrap{grid-template-columns:1fr}}
+  .fileList{list-style:none;padding:.5rem;margin:0;max-height:500px;overflow:auto;border-right:1px solid #27272a;background:#101012}
+  .fileList li{margin:0}
+  .fileList button{width:100%;text-align:left;background:none;border:0;color:#d4d4d8;padding:.35rem .5rem;border-radius:.3rem;cursor:pointer;font-size:.75rem;word-break:break-all;font-family:ui-monospace,monospace}
+  .fileList button:hover{background:#27272a}
+  .fileList button.active{background:#3b82f6;color:white}
+  pre{margin:0}
+  .codeWrap pre{padding:0;max-height:500px;overflow:auto}
+  .codeWrap code{display:block;padding:1rem;font-size:.75rem;font-family:ui-monospace,monospace}
+  .tree{list-style:none;padding:0;max-height:280px;overflow:auto;background:#101012;border:1px solid #27272a;border-radius:.5rem;padding:.5rem}
+  .tree li{display:flex;justify-content:space-between;align-items:center;gap:.5rem;font-family:ui-monospace,monospace;font-size:.72rem;padding:.15rem .3rem}
+  .tree .path{flex:1;color:#d4d4d8}
+  #readme{background:#18181b;border:1px solid #27272a;border-radius:.6rem;padding:1rem 1.25rem}
+  #readme h1,#readme h2,#readme h3{color:#fafafa;text-transform:none;letter-spacing:0;margin:1rem 0 .5rem;font-weight:600}
+  #readme h1{font-size:1.3rem;margin-top:0}
+  #readme h2{font-size:1.1rem}
+  #readme code{background:#27272a;padding:.1rem .3rem;border-radius:.2rem;font-size:.85em}
+  #readme pre{background:#0b0b0c;padding:.75rem;border-radius:.4rem;overflow:auto}
+  #readme pre code{background:none;padding:0}
+  #readme img{max-width:100%;border-radius:.4rem}
+  .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:100;padding:1rem;cursor:zoom-out}
+  .lightbox.on{display:flex}
+  .lightbox img{max-width:100%;max-height:100%;object-fit:contain}
 </style></head>
-<body><h1>📦 Inhalt der ZIP</h1>${body || "<p>Keine anzeigbaren Dateien gefunden.</p>"}</body></html>`;
+<body>
+<header class="top">
+  <div class="icon">📦</div>
+  <div>
+    <h1>${escapeHtml(zipName)}</h1>
+    <div class="meta">${names.length} Dateien · ${formatSize(totalSize)}</div>
+  </div>
+</header>
+${body || "<p>Keine anzeigbaren Dateien gefunden.</p>"}
+<div class="lightbox" id="lb"><img id="lbimg" alt=""></div>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/common.min.js"><\/script>
+<script>
+  // README
+  const rawEl = document.getElementById('readmeRaw');
+  if (rawEl) {
+    const target = document.getElementById('readme');
+    const raw = rawEl.textContent || '';
+    if (target.dataset.md === '1' && window.marked) {
+      target.innerHTML = window.marked.parse(raw);
+    } else {
+      const pre = document.createElement('pre');
+      pre.textContent = raw;
+      target.appendChild(pre);
+    }
+  }
+  // Code viewer
+  const codeDataEl = document.getElementById('codeData');
+  if (codeDataEl) {
+    const data = JSON.parse(codeDataEl.textContent || '[]');
+    const view = document.getElementById('codeView');
+    const buttons = document.querySelectorAll('.fileList button');
+    const show = (i) => {
+      buttons.forEach(b => b.classList.toggle('active', Number(b.dataset.i) === i));
+      view.className = 'hljs language-' + (data[i].lang || 'plaintext');
+      view.textContent = data[i].content;
+      if (window.hljs) window.hljs.highlightElement(view);
+    };
+    buttons.forEach(b => b.addEventListener('click', () => show(Number(b.dataset.i))));
+    if (data.length) show(0);
+  }
+  // Lightbox for images
+  const lb = document.getElementById('lb');
+  const lbimg = document.getElementById('lbimg');
+  document.querySelectorAll('figure img').forEach(img => {
+    img.addEventListener('click', () => { lbimg.src = img.src; lb.classList.add('on'); });
+  });
+  lb.addEventListener('click', () => lb.classList.remove('on'));
+  // Python via Pyodide
+  const runBtn = document.getElementById('runPy');
+  if (runBtn) {
+    const out = document.getElementById('pyOut');
+    const pyFiles = ${JSON.stringify(pyFiles)};
+    const entry = ${JSON.stringify(pyEntry)};
+    let pyodide = null;
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      out.textContent = 'Lade Pyodide (~10 MB) …\\n';
+      try {
+        if (!pyodide) {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js';
+          await new Promise((res, rej) => { s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+          pyodide = await window.loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' });
+          pyodide.setStdout({ batched: (t) => { out.textContent += t + '\\n'; } });
+          pyodide.setStderr({ batched: (t) => { out.textContent += '⚠ ' + t + '\\n'; } });
+        }
+        out.textContent += 'Schreibe Dateien …\\n';
+        for (const f of pyFiles) {
+          const parts = f.path.split('/');
+          let dir = '';
+          for (let i = 0; i < parts.length - 1; i++) {
+            dir += (i ? '/' : '') + parts[i];
+            try { pyodide.FS.mkdir('/' + dir); } catch {}
+          }
+          pyodide.FS.writeFile('/' + f.path, f.content);
+        }
+        out.textContent += '▶ Starte ' + entry + ' …\\n\\n';
+        await pyodide.runPythonAsync('import sys; sys.path.insert(0, "/"); exec(open("/' + entry + '").read())');
+        out.textContent += '\\n✓ Fertig.';
+      } catch (e) {
+        out.textContent += '\\n✗ Fehler: ' + (e && e.message ? e.message : e);
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  }
+<\/script>
+</body></html>`;
 }
 
 function resolvePath(base: string, rel: string): string {
