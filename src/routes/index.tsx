@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import JSZip from "jszip";
+import { reconstructProgram } from "@/lib/ai-reconstruct.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -54,6 +56,58 @@ function formatSize(n: number): string {
   if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
   return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
+
+function platformOf(name: string): string {
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  if (/^(exe|msi|bat|cmd|ps1)$/.test(ext)) return "Windows";
+  if (/^(app|dmg)$/.test(ext)) return "macOS";
+  if (/^(deb|rpm|appimage|sh)$/.test(ext)) return "Linux";
+  if (ext === "apk") return "Android";
+  if (ext === "jar") return "Java";
+  return "Programm";
+}
+
+async function extractStrings(blob: Blob, maxBytes = 2_000_000, minLen = 5, maxCount = 800): Promise<string[]> {
+  const slice = blob.slice(0, Math.min(blob.size, maxBytes));
+  const buf = new Uint8Array(await slice.arrayBuffer());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // ASCII
+  let cur = "";
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (b >= 32 && b < 127) {
+      cur += String.fromCharCode(b);
+    } else {
+      if (cur.length >= minLen && !seen.has(cur)) {
+        seen.add(cur);
+        out.push(cur);
+        if (out.length >= maxCount) break;
+      }
+      cur = "";
+    }
+  }
+  if (cur.length >= minLen && !seen.has(cur) && out.length < maxCount) out.push(cur);
+  // UTF-16LE (häufig in PE-Resourcen für Menü-Texte)
+  if (out.length < maxCount) {
+    let s = "";
+    for (let i = 0; i < buf.length - 1; i += 2) {
+      const lo = buf[i], hi = buf[i + 1];
+      if (hi === 0 && lo >= 32 && lo < 127) {
+        s += String.fromCharCode(lo);
+      } else {
+        if (s.length >= minLen && !seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+          if (out.length >= maxCount) break;
+        }
+        s = "";
+      }
+    }
+  }
+  return out;
+}
+
 
 async function generateAutoViewer(files: FileMap, zipName: string): Promise<string> {
   const names = Object.keys(files).sort();
@@ -426,13 +480,22 @@ function Index() {
   const [srcDoc, setSrcDoc] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [exeCandidate, setExeCandidate] = useState<{ name: string; blob: Blob } | null>(null);
+  const [readmeText, setReadmeText] = useState<string>("");
+  const [allNames, setAllNames] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const urlsRef = useRef<string[]>([]);
+  const reconstruct = useServerFn(reconstructProgram);
 
   const cleanup = () => {
     urlsRef.current.forEach((u) => URL.revokeObjectURL(u));
     urlsRef.current = [];
+    setExeCandidate(null);
+    setReadmeText("");
+    setAllNames([]);
   };
+
 
   const handleFile = useCallback(async (file: File) => {
     setError("");
@@ -466,6 +529,15 @@ function Index() {
         }
       }
 
+      const names = Object.keys(normalized).sort();
+      setAllNames(names);
+      const exeName = names.find((n) => EXT.exe.test(n));
+      if (exeName) setExeCandidate({ name: exeName, blob: normalized[exeName].blob });
+      const rmName =
+        names.find((n) => /(^|\/)readme\.md$/i.test(n)) ||
+        names.find((n) => /(^|\/)readme(\.txt)?$/i.test(n));
+      if (rmName) setReadmeText(await normalized[rmName].blob.text());
+
       const entry = pickEntryHtml(normalized);
       if (entry) {
         setStatus(`Starte ${entry} …`);
@@ -483,6 +555,31 @@ function Index() {
       setError(e instanceof Error ? e.message : "Unbekannter Fehler beim Entpacken.");
     }
   }, []);
+
+  const runAiReconstruct = useCallback(async () => {
+    if (!exeCandidate) return;
+    setAiBusy(true);
+    setError("");
+    try {
+      const strings = await extractStrings(exeCandidate.blob);
+      const result = await reconstruct({
+        data: {
+          name: exeCandidate.name,
+          platform: platformOf(exeCandidate.name),
+          sizeBytes: exeCandidate.blob.size,
+          strings,
+          readme: readmeText || undefined,
+          fileTree: allNames.slice(0, 200),
+        },
+      });
+      setSrcDoc(result.html);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "KI-Rekonstruktion fehlgeschlagen.");
+    } finally {
+      setAiBusy(false);
+    }
+  }, [exeCandidate, readmeText, allNames, reconstruct]);
+
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -508,13 +605,29 @@ function Index() {
             <p className="truncate text-sm font-medium text-foreground">{fileName}</p>
             <p className="text-xs text-muted-foreground">läuft in der Sandbox</p>
           </div>
-          <button
-            onClick={reset}
-            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
-          >
-            Andere ZIP laden
-          </button>
+          <div className="flex items-center gap-2">
+            {exeCandidate && (
+              <button
+                onClick={runAiReconstruct}
+                disabled={aiBusy}
+                title={`KI-Nachbau von ${exeCandidate.name}`}
+                className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-medium text-black transition hover:bg-amber-400 disabled:opacity-50"
+              >
+                {aiBusy ? "🤖 Baue …" : "🤖 KI-Nachbau"}
+              </button>
+            )}
+            <button
+              onClick={reset}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
+            >
+              Andere ZIP laden
+            </button>
+          </div>
         </header>
+        {error && (
+          <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>
+        )}
+
         <iframe
           title="ZIP Preview"
           srcDoc={srcDoc}
