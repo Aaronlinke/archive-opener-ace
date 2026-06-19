@@ -529,6 +529,15 @@ function Index() {
         }
       }
 
+      const names = Object.keys(normalized).sort();
+      setAllNames(names);
+      const exeName = names.find((n) => EXT.exe.test(n));
+      if (exeName) setExeCandidate({ name: exeName, blob: normalized[exeName].blob });
+      const rmName =
+        names.find((n) => /(^|\/)readme\.md$/i.test(n)) ||
+        names.find((n) => /(^|\/)readme(\.txt)?$/i.test(n));
+      if (rmName) setReadmeText(await normalized[rmName].blob.text());
+
       const entry = pickEntryHtml(normalized);
       if (entry) {
         setStatus(`Starte ${entry} …`);
@@ -546,6 +555,31 @@ function Index() {
       setError(e instanceof Error ? e.message : "Unbekannter Fehler beim Entpacken.");
     }
   }, []);
+
+  const runAiReconstruct = useCallback(async () => {
+    if (!exeCandidate) return;
+    setAiBusy(true);
+    setError("");
+    try {
+      const strings = await extractStrings(exeCandidate.blob);
+      const result = await reconstruct({
+        data: {
+          name: exeCandidate.name,
+          platform: platformOf(exeCandidate.name),
+          sizeBytes: exeCandidate.blob.size,
+          strings,
+          readme: readmeText || undefined,
+          fileTree: allNames.slice(0, 200),
+        },
+      });
+      setSrcDoc(result.html);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "KI-Rekonstruktion fehlgeschlagen.");
+    } finally {
+      setAiBusy(false);
+    }
+  }, [exeCandidate, readmeText, allNames, reconstruct]);
+
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
