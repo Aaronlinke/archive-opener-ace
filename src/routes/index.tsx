@@ -57,6 +57,58 @@ function formatSize(n: number): string {
   return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
+function platformOf(name: string): string {
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  if (/^(exe|msi|bat|cmd|ps1)$/.test(ext)) return "Windows";
+  if (/^(app|dmg)$/.test(ext)) return "macOS";
+  if (/^(deb|rpm|appimage|sh)$/.test(ext)) return "Linux";
+  if (ext === "apk") return "Android";
+  if (ext === "jar") return "Java";
+  return "Programm";
+}
+
+async function extractStrings(blob: Blob, maxBytes = 2_000_000, minLen = 5, maxCount = 800): Promise<string[]> {
+  const slice = blob.slice(0, Math.min(blob.size, maxBytes));
+  const buf = new Uint8Array(await slice.arrayBuffer());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // ASCII
+  let cur = "";
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (b >= 32 && b < 127) {
+      cur += String.fromCharCode(b);
+    } else {
+      if (cur.length >= minLen && !seen.has(cur)) {
+        seen.add(cur);
+        out.push(cur);
+        if (out.length >= maxCount) break;
+      }
+      cur = "";
+    }
+  }
+  if (cur.length >= minLen && !seen.has(cur) && out.length < maxCount) out.push(cur);
+  // UTF-16LE (häufig in PE-Resourcen für Menü-Texte)
+  if (out.length < maxCount) {
+    let s = "";
+    for (let i = 0; i < buf.length - 1; i += 2) {
+      const lo = buf[i], hi = buf[i + 1];
+      if (hi === 0 && lo >= 32 && lo < 127) {
+        s += String.fromCharCode(lo);
+      } else {
+        if (s.length >= minLen && !seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+          if (out.length >= maxCount) break;
+        }
+        s = "";
+      }
+    }
+  }
+  return out;
+}
+
+
 async function generateAutoViewer(files: FileMap, zipName: string): Promise<string> {
   const names = Object.keys(files).sort();
   const groups: Record<string, string[]> = {
