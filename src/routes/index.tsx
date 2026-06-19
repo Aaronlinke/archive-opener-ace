@@ -480,13 +480,22 @@ function Index() {
   const [srcDoc, setSrcDoc] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [exeCandidate, setExeCandidate] = useState<{ name: string; blob: Blob } | null>(null);
+  const [readmeText, setReadmeText] = useState<string>("");
+  const [allNames, setAllNames] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const urlsRef = useRef<string[]>([]);
+  const reconstruct = useServerFn(reconstructProgram);
 
   const cleanup = () => {
     urlsRef.current.forEach((u) => URL.revokeObjectURL(u));
     urlsRef.current = [];
+    setExeCandidate(null);
+    setReadmeText("");
+    setAllNames([]);
   };
+
 
   const handleFile = useCallback(async (file: File) => {
     setError("");
