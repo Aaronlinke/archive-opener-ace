@@ -605,13 +605,29 @@ function Index() {
             <p className="truncate text-sm font-medium text-foreground">{fileName}</p>
             <p className="text-xs text-muted-foreground">läuft in der Sandbox</p>
           </div>
-          <button
-            onClick={reset}
-            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
-          >
-            Andere ZIP laden
-          </button>
+          <div className="flex items-center gap-2">
+            {exeCandidate && (
+              <button
+                onClick={runAiReconstruct}
+                disabled={aiBusy}
+                title={`KI-Nachbau von ${exeCandidate.name}`}
+                className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-medium text-black transition hover:bg-amber-400 disabled:opacity-50"
+              >
+                {aiBusy ? "🤖 Baue …" : "🤖 KI-Nachbau"}
+              </button>
+            )}
+            <button
+              onClick={reset}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
+            >
+              Andere ZIP laden
+            </button>
+          </div>
         </header>
+        {error && (
+          <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>
+        )}
+
         <iframe
           title="ZIP Preview"
           srcDoc={srcDoc}
