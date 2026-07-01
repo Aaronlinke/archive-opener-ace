@@ -474,6 +474,23 @@ function rewriteCss(css: string, cssPath: string, files: FileMap): string {
   });
 }
 
+type SavedItem = { id: string; name: string; date: number; html: string };
+const SAVE_KEY = "zipRunner.saved.v1";
+
+function loadSaved(): SavedItem[] {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function persistSaved(items: SavedItem[]) {
+  localStorage.setItem(SAVE_KEY, JSON.stringify(items));
+}
+
 function Index() {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
@@ -484,7 +501,13 @@ function Index() {
   const [exeCandidate, setExeCandidate] = useState<{ name: string; blob: Blob } | null>(null);
   const [readmeText, setReadmeText] = useState<string>("");
   const [allNames, setAllNames] = useState<string[]>([]);
+  const [isAiResult, setIsAiResult] = useState(false);
+  const [saved, setSaved] = useState<SavedItem[]>(() =>
+    typeof window !== "undefined" ? loadSaved() : []
+  );
+  const [saveMsg, setSaveMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const htmlInputRef = useRef<HTMLInputElement>(null);
   const urlsRef = useRef<string[]>([]);
   const reconstruct = useServerFn(reconstructProgram);
 
@@ -494,6 +517,8 @@ function Index() {
     setExeCandidate(null);
     setReadmeText("");
     setAllNames([]);
+    setIsAiResult(false);
+    setSaveMsg("");
   };
 
 
@@ -505,18 +530,27 @@ function Index() {
     cleanup();
 
     try {
+      // Warn for very large archives — browsers may OOM well before file-system limits.
+      if (file.size > 300 * 1024 * 1024) {
+        throw new Error(`ZIP ist ${formatSize(file.size)} groß – Browser-Speicher reicht meist nur bis ~300 MB.`);
+      }
       const zip = await JSZip.loadAsync(file);
       const files: FileMap = {};
       const entries = Object.values(zip.files).filter((f) => !f.dir);
       let i = 0;
       for (const entry of entries) {
         i++;
-        setStatus(`Entpacke ${i}/${entries.length}: ${entry.name}`);
+        if (i % 5 === 0) {
+          setStatus(`Entpacke ${i}/${entries.length}: ${entry.name}`);
+          // Yield to the event loop so the UI stays responsive on big archives.
+          await new Promise((r) => setTimeout(r));
+        }
         const blob = await entry.async("blob");
         const url = URL.createObjectURL(blob);
         urlsRef.current.push(url);
         files[entry.name] = { blob, url };
       }
+
 
       // Strip common single top-level folder prefix, e.g. "site/index.html"
       const topLevels = new Set(Object.keys(files).map((k) => k.split("/")[0]));
@@ -573,12 +607,68 @@ function Index() {
         },
       });
       setSrcDoc(result.html);
+      setIsAiResult(true);
+      setSaveMsg("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "KI-Rekonstruktion fehlgeschlagen.");
     } finally {
       setAiBusy(false);
     }
   }, [exeCandidate, readmeText, allNames, reconstruct]);
+
+  const saveCurrent = useCallback(() => {
+    if (!srcDoc) return;
+    const item: SavedItem = {
+      id: crypto.randomUUID(),
+      name: fileName || "Rekonstruktion",
+      date: Date.now(),
+      html: srcDoc,
+    };
+    const next = [item, ...saved].slice(0, 50);
+    try {
+      persistSaved(next);
+      setSaved(next);
+      setSaveMsg("✓ Gespeichert");
+      setTimeout(() => setSaveMsg(""), 2000);
+    } catch {
+      setError("Speichern fehlgeschlagen – Browser-Speicher voll. Lade als HTML herunter.");
+    }
+  }, [srcDoc, fileName, saved]);
+
+  const downloadHtml = useCallback(() => {
+    if (!srcDoc) return;
+    const blob = new Blob([srcDoc], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (fileName || "rekonstruktion").replace(/\.zip$/i, "") + ".html";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [srcDoc, fileName]);
+
+  const openSaved = (item: SavedItem) => {
+    cleanup();
+    setFileName(item.name);
+    setSrcDoc(item.html);
+    setIsAiResult(true);
+  };
+
+  const deleteSaved = (id: string) => {
+    const next = saved.filter((s) => s.id !== id);
+    persistSaved(next);
+    setSaved(next);
+  };
+
+  const openHtmlFile = useCallback(async (file: File) => {
+    cleanup();
+    setError("");
+    setStatus("");
+    const html = await file.text();
+    setFileName(file.name);
+    setSrcDoc(html);
+    setIsAiResult(true);
+  }, []);
+
 
 
   const onDrop = (e: React.DragEvent) => {
@@ -606,7 +696,7 @@ function Index() {
             <p className="text-xs text-muted-foreground">läuft in der Sandbox</p>
           </div>
           <div className="flex items-center gap-2">
-            {exeCandidate && (
+            {exeCandidate && !isAiResult && (
               <button
                 onClick={runAiReconstruct}
                 disabled={aiBusy}
@@ -616,6 +706,23 @@ function Index() {
                 {aiBusy ? "🤖 Baue …" : "🤖 KI-Nachbau"}
               </button>
             )}
+            {isAiResult && (
+              <>
+                {saveMsg && <span className="text-xs text-emerald-500">{saveMsg}</span>}
+                <button
+                  onClick={saveCurrent}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500"
+                >
+                  💾 Speichern
+                </button>
+                <button
+                  onClick={downloadHtml}
+                  className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition hover:bg-secondary/80"
+                >
+                  ⬇ HTML
+                </button>
+              </>
+            )}
             <button
               onClick={reset}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
@@ -623,6 +730,7 @@ function Index() {
               Andere ZIP laden
             </button>
           </div>
+
         </header>
         {error && (
           <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>
@@ -687,12 +795,62 @@ function Index() {
           </p>
         )}
 
-        <div className="mt-8 rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => htmlInputRef.current?.click()}
+            className="flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition hover:border-primary/50 hover:bg-accent/50"
+          >
+            📂 Gespeicherte HTML-Datei öffnen
+          </button>
+          <input
+            ref={htmlInputRef}
+            type="file"
+            accept=".html,.htm,text/html"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) openHtmlFile(f);
+            }}
+          />
+        </div>
+
+        {saved.length > 0 && (
+          <div className="mt-6 rounded-lg border border-border bg-card p-4">
+            <p className="mb-2 text-sm font-medium text-foreground">💾 Gespeicherte Rekonstruktionen</p>
+            <ul className="space-y-1">
+              {saved.map((s) => (
+                <li key={s.id} className="flex items-center gap-2 text-xs">
+                  <button
+                    onClick={() => openSaved(s)}
+                    className="flex-1 truncate rounded px-2 py-1 text-left text-foreground hover:bg-accent"
+                    title={s.name}
+                  >
+                    {s.name}
+                    <span className="ml-2 text-muted-foreground">
+                      {new Date(s.date).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => deleteSaved(s.id)}
+                    className="rounded px-2 py-1 text-destructive hover:bg-destructive/10"
+                    title="Löschen"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mt-6 rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
           <p className="mb-1 font-medium text-foreground">Funktioniert mit</p>
           <ul className="list-disc space-y-0.5 pl-5">
             <li>Statischen Websites (index.html + Assets)</li>
             <li>Vanilla JS / CSS Projekten</li>
             <li>Gebauten Web-Apps (z. B. Vite/CRA <code>dist</code>-Ordner als ZIP)</li>
+            <li>Bis ca. 100–200 MB pro ZIP – größere brauchen viel Browser-RAM.</li>
           </ul>
           <p className="mt-2">
             Nicht unterstützt: Server-Code (Node/PHP), <code>fetch</code> auf relative Pfade ohne mit-gepackte Dateien.
@@ -702,3 +860,4 @@ function Index() {
     </div>
   );
 }
+
