@@ -530,18 +530,27 @@ function Index() {
     cleanup();
 
     try {
+      // Warn for very large archives — browsers may OOM well before file-system limits.
+      if (file.size > 300 * 1024 * 1024) {
+        throw new Error(`ZIP ist ${formatSize(file.size)} groß – Browser-Speicher reicht meist nur bis ~300 MB.`);
+      }
       const zip = await JSZip.loadAsync(file);
       const files: FileMap = {};
       const entries = Object.values(zip.files).filter((f) => !f.dir);
       let i = 0;
       for (const entry of entries) {
         i++;
-        setStatus(`Entpacke ${i}/${entries.length}: ${entry.name}`);
+        if (i % 5 === 0) {
+          setStatus(`Entpacke ${i}/${entries.length}: ${entry.name}`);
+          // Yield to the event loop so the UI stays responsive on big archives.
+          await new Promise((r) => setTimeout(r));
+        }
         const blob = await entry.async("blob");
         const url = URL.createObjectURL(blob);
         urlsRef.current.push(url);
         files[entry.name] = { blob, url };
       }
+
 
       // Strip common single top-level folder prefix, e.g. "site/index.html"
       const topLevels = new Set(Object.keys(files).map((k) => k.split("/")[0]));
