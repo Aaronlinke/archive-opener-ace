@@ -795,12 +795,62 @@ function Index() {
           </p>
         )}
 
-        <div className="mt-8 rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => htmlInputRef.current?.click()}
+            className="flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition hover:border-primary/50 hover:bg-accent/50"
+          >
+            📂 Gespeicherte HTML-Datei öffnen
+          </button>
+          <input
+            ref={htmlInputRef}
+            type="file"
+            accept=".html,.htm,text/html"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) openHtmlFile(f);
+            }}
+          />
+        </div>
+
+        {saved.length > 0 && (
+          <div className="mt-6 rounded-lg border border-border bg-card p-4">
+            <p className="mb-2 text-sm font-medium text-foreground">💾 Gespeicherte Rekonstruktionen</p>
+            <ul className="space-y-1">
+              {saved.map((s) => (
+                <li key={s.id} className="flex items-center gap-2 text-xs">
+                  <button
+                    onClick={() => openSaved(s)}
+                    className="flex-1 truncate rounded px-2 py-1 text-left text-foreground hover:bg-accent"
+                    title={s.name}
+                  >
+                    {s.name}
+                    <span className="ml-2 text-muted-foreground">
+                      {new Date(s.date).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => deleteSaved(s.id)}
+                    className="rounded px-2 py-1 text-destructive hover:bg-destructive/10"
+                    title="Löschen"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mt-6 rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
           <p className="mb-1 font-medium text-foreground">Funktioniert mit</p>
           <ul className="list-disc space-y-0.5 pl-5">
             <li>Statischen Websites (index.html + Assets)</li>
             <li>Vanilla JS / CSS Projekten</li>
             <li>Gebauten Web-Apps (z. B. Vite/CRA <code>dist</code>-Ordner als ZIP)</li>
+            <li>Bis ca. 100–200 MB pro ZIP – größere brauchen viel Browser-RAM.</li>
           </ul>
           <p className="mt-2">
             Nicht unterstützt: Server-Code (Node/PHP), <code>fetch</code> auf relative Pfade ohne mit-gepackte Dateien.
@@ -810,3 +860,4 @@ function Index() {
     </div>
   );
 }
+
