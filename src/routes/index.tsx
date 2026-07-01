@@ -474,6 +474,23 @@ function rewriteCss(css: string, cssPath: string, files: FileMap): string {
   });
 }
 
+type SavedItem = { id: string; name: string; date: number; html: string };
+const SAVE_KEY = "zipRunner.saved.v1";
+
+function loadSaved(): SavedItem[] {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function persistSaved(items: SavedItem[]) {
+  localStorage.setItem(SAVE_KEY, JSON.stringify(items));
+}
+
 function Index() {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
@@ -484,7 +501,13 @@ function Index() {
   const [exeCandidate, setExeCandidate] = useState<{ name: string; blob: Blob } | null>(null);
   const [readmeText, setReadmeText] = useState<string>("");
   const [allNames, setAllNames] = useState<string[]>([]);
+  const [isAiResult, setIsAiResult] = useState(false);
+  const [saved, setSaved] = useState<SavedItem[]>(() =>
+    typeof window !== "undefined" ? loadSaved() : []
+  );
+  const [saveMsg, setSaveMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const htmlInputRef = useRef<HTMLInputElement>(null);
   const urlsRef = useRef<string[]>([]);
   const reconstruct = useServerFn(reconstructProgram);
 
@@ -494,6 +517,8 @@ function Index() {
     setExeCandidate(null);
     setReadmeText("");
     setAllNames([]);
+    setIsAiResult(false);
+    setSaveMsg("");
   };
 
 
