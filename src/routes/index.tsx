@@ -696,7 +696,7 @@ function Index() {
             <p className="text-xs text-muted-foreground">läuft in der Sandbox</p>
           </div>
           <div className="flex items-center gap-2">
-            {exeCandidate && (
+            {exeCandidate && !isAiResult && (
               <button
                 onClick={runAiReconstruct}
                 disabled={aiBusy}
@@ -706,6 +706,23 @@ function Index() {
                 {aiBusy ? "🤖 Baue …" : "🤖 KI-Nachbau"}
               </button>
             )}
+            {isAiResult && (
+              <>
+                {saveMsg && <span className="text-xs text-emerald-500">{saveMsg}</span>}
+                <button
+                  onClick={saveCurrent}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500"
+                >
+                  💾 Speichern
+                </button>
+                <button
+                  onClick={downloadHtml}
+                  className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition hover:bg-secondary/80"
+                >
+                  ⬇ HTML
+                </button>
+              </>
+            )}
             <button
               onClick={reset}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90"
@@ -713,6 +730,7 @@ function Index() {
               Andere ZIP laden
             </button>
           </div>
+
         </header>
         {error && (
           <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>
