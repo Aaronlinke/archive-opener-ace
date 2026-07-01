@@ -607,12 +607,68 @@ function Index() {
         },
       });
       setSrcDoc(result.html);
+      setIsAiResult(true);
+      setSaveMsg("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "KI-Rekonstruktion fehlgeschlagen.");
     } finally {
       setAiBusy(false);
     }
   }, [exeCandidate, readmeText, allNames, reconstruct]);
+
+  const saveCurrent = useCallback(() => {
+    if (!srcDoc) return;
+    const item: SavedItem = {
+      id: crypto.randomUUID(),
+      name: fileName || "Rekonstruktion",
+      date: Date.now(),
+      html: srcDoc,
+    };
+    const next = [item, ...saved].slice(0, 50);
+    try {
+      persistSaved(next);
+      setSaved(next);
+      setSaveMsg("✓ Gespeichert");
+      setTimeout(() => setSaveMsg(""), 2000);
+    } catch {
+      setError("Speichern fehlgeschlagen – Browser-Speicher voll. Lade als HTML herunter.");
+    }
+  }, [srcDoc, fileName, saved]);
+
+  const downloadHtml = useCallback(() => {
+    if (!srcDoc) return;
+    const blob = new Blob([srcDoc], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (fileName || "rekonstruktion").replace(/\.zip$/i, "") + ".html";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [srcDoc, fileName]);
+
+  const openSaved = (item: SavedItem) => {
+    cleanup();
+    setFileName(item.name);
+    setSrcDoc(item.html);
+    setIsAiResult(true);
+  };
+
+  const deleteSaved = (id: string) => {
+    const next = saved.filter((s) => s.id !== id);
+    persistSaved(next);
+    setSaved(next);
+  };
+
+  const openHtmlFile = useCallback(async (file: File) => {
+    cleanup();
+    setError("");
+    setStatus("");
+    const html = await file.text();
+    setFileName(file.name);
+    setSrcDoc(html);
+    setIsAiResult(true);
+  }, []);
+
 
 
   const onDrop = (e: React.DragEvent) => {
