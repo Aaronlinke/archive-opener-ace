@@ -844,6 +844,14 @@ function Index() {
           </div>
         )}
 
+        <Link
+          to="/pipeline"
+          className="mt-6 block rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground transition hover:border-primary"
+        >
+          <span className="mb-1 block font-medium text-foreground">⚡ Code-Pipeline öffnen</span>
+          Prompt eingeben – sieben Stufen bauen, prüfen und verbessern die Lösung Schritt für Schritt.
+        </Link>
+
         <div className="mt-6 rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
           <p className="mb-1 font-medium text-foreground">Funktioniert mit</p>
           <ul className="list-disc space-y-0.5 pl-5">
