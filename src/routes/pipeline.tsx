@@ -45,6 +45,23 @@ type Result = {
 
 const STORE_KEY = "pipeline-runs-v1";
 
+type SavedRun = { at: number; prompt: string; results: Result[] };
+
+function loadSaved(): SavedRun[] {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? (JSON.parse(raw) as SavedRun[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Zieht den ersten HTML-Codeblock aus dem Finale-Output heraus. */
+function extractHtml(output: string): string | null {
+  const m = output.match(/```html\s*\n([\s\S]*?)```/i);
+  return m ? m[1].trim() : null;
+}
+
 function Pipeline() {
   const run = useServerFn(runPipelineStage);
   const [prompt, setPrompt] = useState("");
@@ -52,7 +69,13 @@ function Pipeline() {
   const [active, setActive] = useState<StageId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [saved, setSaved] = useState<SavedRun[]>([]);
   const abort = useRef(false);
+
+  useState(() => {
+    setSaved(loadSaved());
+    return undefined;
+  });
 
   const start = useCallback(async () => {
     if (!prompt.trim() || active) return;
