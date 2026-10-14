@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { runPipelineStage, type StageId } from "@/lib/pipeline.functions";
 
@@ -45,6 +45,23 @@ type Result = {
 
 const STORE_KEY = "pipeline-runs-v1";
 
+type SavedRun = { at: number; prompt: string; results: Result[] };
+
+function loadSaved(): SavedRun[] {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? (JSON.parse(raw) as SavedRun[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Zieht den ersten HTML-Codeblock aus dem Finale-Output heraus. */
+function extractHtml(output: string): string | null {
+  const m = output.match(/```html\s*\n([\s\S]*?)```/i);
+  return m ? m[1].trim() : null;
+}
+
 function Pipeline() {
   const run = useServerFn(runPipelineStage);
   const [prompt, setPrompt] = useState("");
@@ -52,7 +69,12 @@ function Pipeline() {
   const [active, setActive] = useState<StageId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [saved, setSaved] = useState<SavedRun[]>([]);
   const abort = useRef(false);
+
+  useEffect(() => {
+    setSaved(loadSaved());
+  }, []);
 
   const start = useCallback(async () => {
     if (!prompt.trim() || active) return;
@@ -87,15 +109,46 @@ function Pipeline() {
   const save = useCallback(() => {
     if (!results.length) return;
     try {
-      const raw = localStorage.getItem(STORE_KEY);
-      const list = raw ? (JSON.parse(raw) as unknown[]) : [];
+      const list = loadSaved();
       list.unshift({ at: Date.now(), prompt, results });
       localStorage.setItem(STORE_KEY, JSON.stringify(list.slice(0, 20)));
+      setSaved(loadSaved());
       setError(null);
     } catch {
       setError("Speichern fehlgeschlagen (Speicher voll?).");
     }
   }, [results, prompt]);
+
+  const openSaved = useCallback((item: SavedRun) => {
+    setPrompt(item.prompt);
+    setResults(item.results);
+    setOpen({ team: true });
+    setError(null);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const deleteSaved = useCallback((at: number) => {
+    const list = loadSaved().filter((r) => r.at !== at);
+    localStorage.setItem(STORE_KEY, JSON.stringify(list));
+    setSaved(list);
+  }, []);
+
+  /** Führt den finalen HTML-Code direkt im Browser aus (neuer Tab). */
+  const runFinalHtml = useCallback((output: string) => {
+    const html = extractHtml(output);
+    if (!html) {
+      setError("Kein HTML-Codeblock im Ergebnis gefunden.");
+      return;
+    }
+    const w = window.open("", "_blank");
+    if (!w) {
+      setError("Popup blockiert – bitte Popups erlauben.");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    w.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, []);
 
   const download = useCallback(() => {
     const md = [
@@ -203,12 +256,51 @@ function Pipeline() {
                       </details>
                     )}
                     <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">{res.output}</pre>
+                    {s.id === "team" && extractHtml(res.output) && (
+                      <button
+                        onClick={() => runFinalHtml(res.output)}
+                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      >
+                        ▶ Code im Browser ausführen
+                      </button>
+                    )}
                   </div>
                 )}
               </li>
             );
           })}
         </ol>
+
+        {saved.length > 0 && (
+          <div className="mt-8">
+            <h2 className="mb-2 text-sm font-semibold">Gespeicherte Läufe</h2>
+            <ul className="space-y-2">
+              {saved.map((item) => (
+                <li
+                  key={item.at}
+                  className="flex items-center gap-2 rounded-lg border border-border bg-card p-3"
+                >
+                  <button
+                    onClick={() => openSaved(item)}
+                    className="flex-1 truncate text-left text-sm hover:underline"
+                    title={item.prompt}
+                  >
+                    {item.prompt.slice(0, 80) || "(ohne Titel)"}
+                  </button>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {new Date(item.at).toLocaleDateString("de-DE")}
+                  </span>
+                  <button
+                    onClick={() => deleteSaved(item.at)}
+                    className="shrink-0 rounded border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    Löschen
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );
