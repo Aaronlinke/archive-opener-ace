@@ -72,10 +72,9 @@ function Pipeline() {
   const [saved, setSaved] = useState<SavedRun[]>([]);
   const abort = useRef(false);
 
-  useState(() => {
+  useEffect(() => {
     setSaved(loadSaved());
-    return undefined;
-  });
+  }, []);
 
   const start = useCallback(async () => {
     if (!prompt.trim() || active) return;
