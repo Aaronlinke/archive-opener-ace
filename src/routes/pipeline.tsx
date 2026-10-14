@@ -109,15 +109,46 @@ function Pipeline() {
   const save = useCallback(() => {
     if (!results.length) return;
     try {
-      const raw = localStorage.getItem(STORE_KEY);
-      const list = raw ? (JSON.parse(raw) as unknown[]) : [];
+      const list = loadSaved();
       list.unshift({ at: Date.now(), prompt, results });
       localStorage.setItem(STORE_KEY, JSON.stringify(list.slice(0, 20)));
+      setSaved(loadSaved());
       setError(null);
     } catch {
       setError("Speichern fehlgeschlagen (Speicher voll?).");
     }
   }, [results, prompt]);
+
+  const openSaved = useCallback((item: SavedRun) => {
+    setPrompt(item.prompt);
+    setResults(item.results);
+    setOpen({ team: true });
+    setError(null);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const deleteSaved = useCallback((at: number) => {
+    const list = loadSaved().filter((r) => r.at !== at);
+    localStorage.setItem(STORE_KEY, JSON.stringify(list));
+    setSaved(list);
+  }, []);
+
+  /** Führt den finalen HTML-Code direkt im Browser aus (neuer Tab). */
+  const runFinalHtml = useCallback((output: string) => {
+    const html = extractHtml(output);
+    if (!html) {
+      setError("Kein HTML-Codeblock im Ergebnis gefunden.");
+      return;
+    }
+    const w = window.open("", "_blank");
+    if (!w) {
+      setError("Popup blockiert – bitte Popups erlauben.");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    w.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, []);
 
   const download = useCallback(() => {
     const md = [
