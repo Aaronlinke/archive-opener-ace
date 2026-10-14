@@ -256,12 +256,51 @@ function Pipeline() {
                       </details>
                     )}
                     <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">{res.output}</pre>
+                    {s.id === "team" && extractHtml(res.output) && (
+                      <button
+                        onClick={() => runFinalHtml(res.output)}
+                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      >
+                        ▶ Code im Browser ausführen
+                      </button>
+                    )}
                   </div>
                 )}
               </li>
             );
           })}
         </ol>
+
+        {saved.length > 0 && (
+          <div className="mt-8">
+            <h2 className="mb-2 text-sm font-semibold">Gespeicherte Läufe</h2>
+            <ul className="space-y-2">
+              {saved.map((item) => (
+                <li
+                  key={item.at}
+                  className="flex items-center gap-2 rounded-lg border border-border bg-card p-3"
+                >
+                  <button
+                    onClick={() => openSaved(item)}
+                    className="flex-1 truncate text-left text-sm hover:underline"
+                    title={item.prompt}
+                  >
+                    {item.prompt.slice(0, 80) || "(ohne Titel)"}
+                  </button>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {new Date(item.at).toLocaleDateString("de-DE")}
+                  </span>
+                  <button
+                    onClick={() => deleteSaved(item.at)}
+                    className="shrink-0 rounded border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    Löschen
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );
